@@ -1,0 +1,174 @@
+<style>
+.sheet-box .pdf-icon{font:700 16px Arial;color:#35705a;background:#edf5ef;border-radius:8px;padding:12px;width:fit-content}
+.sheet-upload{border-top:1px solid #e4e7ec;padding-top:12px;display:flex;flex-direction:column;align-items:stretch!important}
+.sheet-upload label{font-weight:600}.sheet-upload small{color:#777;font-size:12px}.sheet-upload-status{white-space:pre-wrap;font-size:12px}
+.sheet-dialog{box-sizing:border-box;width:min(1400px,95vw);max-height:90vh;padding:22px;border:1px solid #dedbd3;border-radius:14px;color:#302d28;background:#fffefd}
+.sheet-dialog::backdrop{background:#20212488}.sheet-toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.sheet-toolbar h2{margin:0;flex:1;min-width:min(260px,100%);font-size:20px;overflow-wrap:anywhere}.sheet-toolbar input{flex:1;min-width:190px}
+.sheet-toolbar input,.sheet-toolbar select,.sheet-toolbar button,.sheet-toolbar a{padding:9px 12px;border:1px solid #ddd8cf;border-radius:8px;background:white;color:#484238;font:13px Arial}
+.sheet-toolbar a{text-decoration:none}.sheet-table-wrap{max-height:57vh;overflow:auto;border:1px solid #e2dfd8;border-radius:8px}
+.sheet-table{border-collapse:separate;border-spacing:0;font-size:13px;min-width:100%}.sheet-table th,.sheet-table td{padding:8px 10px;text-align:left;vertical-align:top;border-right:1px solid #eee;border-bottom:1px solid #eee;min-width:85px;max-width:380px;overflow-wrap:anywhere;white-space:pre-wrap}
+.sheet-table th{position:sticky;top:0;background:#f3f0ea;z-index:1;font-weight:600}.sheet-table td small{display:block;color:#888;font-size:10px;margin-bottom:4px}.sheet-table caption{text-align:left;padding:10px;color:#666}
+.sheet-info{margin:10px 0;font-size:13px;color:#71695e;white-space:pre-wrap}.sheet-toolbar button:disabled{opacity:.4;cursor:default}
+body>header .tabs #fileType{width:165px;min-height:38px;padding:8px 10px;border:1px solid #e2dfd8;border-radius:10px;background:#fffefd;color:#484238;font:13px Arial;flex-shrink:0}
+</style>
+<style>
+.sheet-actions,.sheet-selection{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px}
+.sheet-actions label{display:flex;align-items:center;gap:6px;font-size:13px}
+.sheet-delete{border:1px solid #dfb9b5;border-radius:8px;background:#fff5f3;color:#a52b20;padding:8px 10px;cursor:pointer}
+.sheet-delete:disabled{opacity:.45;cursor:default}.sheet-selection[hidden]{display:none}
+</style>
+<dialog id="sheetDialog" class="sheet-dialog" aria-labelledby="sheetTitle">
+  <div class="sheet-toolbar"><h2 id="sheetTitle">Spreadsheet</h2><a id="sheetDownload">Download original</a><button id="sheetClose" type="button">Back to files</button></div>
+  <div class="sheet-toolbar"><label for="sheetSelect">Sheet</label><select id="sheetSelect"><option value="">All sheets</option></select><input id="sheetSearch" type="search" aria-label="Search cells in this file" placeholder="Search cells in this file"></div>
+  <div id="sheetWarnings" class="sheet-info"></div><div id="sheetInfo" class="sheet-info" role="status"></div>
+  <div class="sheet-table-wrap"><table id="sheetTable" class="sheet-table"></table></div>
+  <div class="sheet-toolbar"><button id="sheetPrev" type="button">Previous 100 rows</button><button id="sheetNext" type="button">Next 100 rows</button></div>
+</dialog>
+<script>
+const sheetDialog=document.querySelector('#sheetDialog'),sheetSearch=document.querySelector('#sheetSearch'),sheetSelect=document.querySelector('#sheetSelect'),sheetTable=document.querySelector('#sheetTable'),sheetInfo=document.querySelector('#sheetInfo');
+let sheetFile=null,sheetOffset=0,sheetRequest=0,sheetTimer;
+function sheetElement(tag,text,cls){const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(cls)el.className=cls;return el;}
+function spreadsheetDownload(id){return '/api/spreadsheets/'+encodeURIComponent(id)+'/download';}
+const selectedSheets=new Map();let deletingSheets=false;
+const sheetSelection=sheetElement('div',undefined,'sheet-selection');
+const sheetSelectedCount=sheetElement('span'),sheetDeleteSelected=sheetElement('button','Delete selected permanently','sheet-delete');
+sheetDeleteSelected.type='button';sheetDeleteSelected.onclick=()=>deleteSheets([...selectedSheets.values()]);
+sheetSelection.append(sheetSelectedCount,sheetDeleteSelected);count.before(sheetSelection);
+function updateSheetSelection(){sheetSelection.hidden=!selectedSheets.size;sheetSelectedCount.textContent=selectedSheets.size+' spreadsheets selected';sheetDeleteSelected.disabled=deletingSheets;}
+async function deleteSheets(cards){
+  if(deletingSheets||!cards.length)return;
+  if(!confirm('Permanently delete '+cards.length+' spreadsheet file(s)?\n\n'+cards.map(card=>card.name).join('\n')+'\n\nThis removes the uploaded originals and searchable cells. It cannot be undone.'))return;
+  deletingSheets=true;render();const failures=[];
+  try{for(const card of cards){
+    try{
+      const response=await fetch('/api/spreadsheets/'+encodeURIComponent(card.file_id)+'?confirm=true',{method:'DELETE'});
+      if(!response.ok){const error=await response.json();throw Error(error.detail||'Deletion failed');}
+      selectedSheets.delete(card.file_id);data=data.filter(item=>item.file_id!==card.file_id);
+    }catch(error){failures.push(card.name+': '+error.message);}
+  }}finally{deletingSheets=false;render();await loadLiveGallery();}
+  if(failures.length)alert('Some files could not be deleted:\n'+failures.join('\n'));
+}
+function makeSpreadsheetBox(card){
+  const box=sheetElement('article',undefined,'pdf-card sheet-box'),button=sheetElement('button',undefined,'pdf-open');button.type='button';
+  const title=sheetElement('div',undefined,'pdf-title');addText(title,card.name,q.value.trim());
+  button.append(sheetElement('div',card.file_type.toUpperCase(),'pdf-icon'),title,sheetElement('div',card.sheet_count+' sheets · '+(card.match_preview||'Open table and search cells'),'pdf-meta'));
+  button.onclick=()=>openSpreadsheet(card);box.append(button);
+  const link=sheetElement('a','Download original','pdf-download');link.href=spreadsheetDownload(card.file_id);link.download=card.name;box.append(link);
+  const actions=sheetElement('div',undefined,'sheet-actions'),label=sheetElement('label'),check=document.createElement('input');
+  check.type='checkbox';check.checked=selectedSheets.has(card.file_id);check.disabled=deletingSheets;check.setAttribute('aria-label','Select '+card.name+' for deletion');
+  check.onchange=()=>{if(check.checked)selectedSheets.set(card.file_id,card);else selectedSheets.delete(card.file_id);updateSheetSelection();};
+  label.append(check,document.createTextNode('Select'));const remove=sheetElement('button','Delete permanently','sheet-delete');remove.type='button';remove.disabled=deletingSheets;remove.onclick=()=>deleteSheets([card]);
+  actions.append(label,remove);box.append(actions);return box;
+}
+const originalMakePdfBox=makePdfBox;makePdfBox=function(items){return items[0].file_id?makeSpreadsheetBox(items[0]):originalMakePdfBox(items);};
+const originalMakeCard=makeCard;makeCard=function(card,term){return card.file_id?makeSpreadsheetBox(card):originalMakeCard(card,term);};
+const fileType=document.createElement('select');fileType.id='fileType';fileType.setAttribute('aria-label','View by file type');
+for(const [value,label] of [['','View by file'],['pdf','View by PDF'],['spreadsheet','View by XLS/CSV']]){const option=sheetElement('option',label);option.value=value;fileType.append(option);}
+groupByPdf.parentElement.before(fileType);
+groupByPdf.parentElement.style.display='none';
+const originalApplyFilters=applyFilters;applyFilters=function(cards){return originalApplyFilters(cards.filter(card=>!fileType.value||(fileType.value==='pdf'?!card.file_id:['xls','xlsx','csv'].includes(card.file_type))));};
+fileType.onchange=()=>{pdfFilter.value='';groupByPdf.checked=true;syncGroupingCheckboxes();};
+q.placeholder='Search filename, OCR or spreadsheet cells';document.querySelector('label[for="q"]').textContent=q.placeholder;
+document.querySelector('label[for="pdfFilter"]').textContent='File';
+// Keep the same file filter and grouping state while broadening their labels.
+const originalFillFilter=fillFilter;fillFilter=function(select,values,label){originalFillFilter(select,values,label==='All PDF files'?'All files':label);};
+fileType.value='pdf';groupByPdf.checked=false;groupByDate.checked=false;syncGroupingCheckboxes();
+// Photos means page images: leave the file-box view and show every PDF page.
+document.querySelector('[data-tab="main"]').addEventListener('click',()=>{
+  fileType.value='pdf';groupByPdf.checked=false;groupByDate.checked=false;syncGroupingCheckboxes();
+});
+const originalFileRender=render;render=function(){
+  const visible=new Set(selectedPdf||tab==='trash'?[]:applyFilters(data).filter(card=>card.file_id).map(card=>card.file_id));
+  for(const id of selectedSheets.keys())if(!visible.has(id))selectedSheets.delete(id);
+  originalFileRender();if(!selectedPdf)count.textContent=count.textContent.replace(/\bPDFs\b/g,'files').replace(/\bimages\b/g,'items');updateSheetSelection();
+};
+// Search spreadsheet cells on the server; the full row index stays local.
+let galleryAbort=null;
+loadLiveGallery=async function(){
+  const request=++liveGalleryRequest,term=q.value.trim();
+  galleryAbort?.abort();galleryAbort=new AbortController();const signal=galleryAbort.signal;
+  try{
+    const galleryParams=new URLSearchParams({trash:String(tab==='trash'),query:term,include_text:String(Boolean(term))});
+    const [pdfResponse,sheetResponse]=await Promise.all([fetch('/api/gallery?'+galleryParams,{signal}),
+      tab==='trash'?Promise.resolve(null):fetch('/api/spreadsheets?query='+encodeURIComponent(term),{signal})]);
+    if(!pdfResponse.ok)throw Error('Gallery request failed');
+    if(sheetResponse&&!sheetResponse.ok)throw Error('Spreadsheet service unavailable. Restart the gallery app after updating.');
+    const [pdfCards,sheetCards]=await Promise.all([pdfResponse.json(),sheetResponse?sheetResponse.json():[]]);
+    if(request!==liveGalleryRequest)return;
+    data=[...pdfCards,...sheetCards];render();
+  }catch(error){if(request===liveGalleryRequest&&error.name!=='AbortError'){count.textContent=error.message;}}
+};
+q.oninput=()=>{clearTimeout(liveGalleryTimer);++liveGalleryRequest;liveGalleryTimer=setTimeout(loadLiveGallery,150);};
+async function openSpreadsheet(card){
+  sheetFile=card;sheetOffset=0;sheetSelect.replaceChildren(sheetElement('option','All sheets'));sheetSelect.children[0].value='';
+  const term=q.value.trim();sheetSearch.value=card.name.toLowerCase().includes(term.toLowerCase())?'':term;
+  document.querySelector('#sheetTitle').textContent=card.name;
+  const download=document.querySelector('#sheetDownload');download.href=spreadsheetDownload(card.file_id);download.download=card.name;
+  sheetTable.replaceChildren();document.querySelector('#sheetWarnings').textContent='';sheetDialog.showModal();await loadSheetRows(true);
+}
+function columnLetters(number){let result='';while(number){number--;result=String.fromCharCode(65+number%26)+result;number=Math.floor(number/26);}return result;}
+async function loadSheetRows(populate=false){
+  if(!sheetFile)return;const request=++sheetRequest;
+  sheetInfo.textContent='Loading rows…';sheetTable.replaceChildren();document.querySelector('#sheetPrev').disabled=true;document.querySelector('#sheetNext').disabled=true;
+  const params=new URLSearchParams({query:sheetSearch.value.trim(),offset:String(sheetOffset),limit:'100'});if(sheetSelect.value!=='')params.set('sheet',sheetSelect.value);
+  try{
+    const response=await fetch('/api/spreadsheets/'+encodeURIComponent(sheetFile.file_id)+'/rows?'+params);
+    if(!response.ok)throw Error('Could not load spreadsheet rows.');const result=await response.json();if(request!==sheetRequest)return;
+    if(populate){for(const sheet of result.sheets){const option=sheetElement('option',sheet.name);option.value=String(sheet.idx);sheetSelect.append(option);}}
+    document.querySelector('#sheetWarnings').textContent=result.warnings.join('\n');
+    sheetInfo.textContent=result.total?((result.offset+1)+'–'+Math.min(result.offset+result.rows.length,result.total)+' of '+result.total+' rows'):'No matching rows. Clear or change the search.';
+    const columns=[...new Set(result.rows.flatMap(row=>row.cells.map(cell=>cell.column)))].sort((a,b)=>a-b);
+    const head=document.createElement('thead'),tr=document.createElement('tr');tr.append(sheetElement('th','Sheet'),sheetElement('th','Row'));
+    for(const column of columns)tr.append(sheetElement('th',columnLetters(column)));head.append(tr);sheetTable.append(head);
+    const body=document.createElement('tbody');for(const row of result.rows){
+      const line=document.createElement('tr');line.append(sheetElement('td',row.sheet),sheetElement('td',String(row.row)));
+      const cells=new Map(row.cells.map(cell=>[cell.column,cell]));for(const column of columns){
+        const td=document.createElement('td'),cell=cells.get(column);if(cell){
+          td.append(sheetElement('small',cell.address));const value=document.createElement('span');addText(value,cell.value,sheetSearch.value.trim());td.append(value);
+          if(cell.formula){const formula=sheetElement('small');addText(formula,cell.formula,sheetSearch.value.trim());td.append(formula);}
+        }line.append(td);
+      }body.append(line);
+    }sheetTable.append(body);
+    document.querySelector('#sheetPrev').disabled=sheetOffset===0;document.querySelector('#sheetNext').disabled=sheetOffset+100>=result.total;
+  }catch(error){if(request===sheetRequest)sheetInfo.textContent=error.message;}
+}
+document.querySelector('#sheetClose').onclick=()=>sheetDialog.close();sheetDialog.addEventListener('close',()=>{++sheetRequest;clearTimeout(sheetTimer);sheetFile=null;});
+sheetSearch.oninput=()=>{sheetOffset=0;++sheetRequest;clearTimeout(sheetTimer);sheetTimer=setTimeout(()=>loadSheetRows(),250);};
+sheetSelect.onchange=()=>{sheetOffset=0;loadSheetRows();};
+document.querySelector('#sheetPrev').onclick=()=>{sheetOffset=Math.max(0,sheetOffset-100);loadSheetRows();};
+document.querySelector('#sheetNext').onclick=()=>{sheetOffset+=100;loadSheetRows();};
+const uploadSection=sheetElement('div',undefined,'sheet-upload'),uploadLabel=sheetElement('label','Excel / CSV files');uploadLabel.htmlFor='sheetUpload';
+const sheetUpload=document.createElement('input');sheetUpload.type='file';sheetUpload.id='sheetUpload';sheetUpload.accept='.xls,.xlsx,.csv';sheetUpload.multiple=true;
+const uploadButton=sheetElement('button','Upload spreadsheets');uploadButton.type='button';const uploadStatus=sheetElement('div','', 'sheet-upload-status');uploadStatus.setAttribute('role','status');
+uploadSection.append(uploadLabel,sheetElement('small','XLS, XLSX or CSV · up to 50 MB per file'),sheetUpload,uploadButton,uploadStatus);
+uploadSection.id='spreadsheetSource';
+document.querySelector('#imageSource').after(uploadSection);
+const spreadsheetOption=document.createElement('input');
+spreadsheetOption.type='radio';spreadsheetOption.name='sourceType';spreadsheetOption.id='spreadsheetOption';
+const spreadsheetSourceLabel=sheetElement('label');
+spreadsheetSourceLabel.append(spreadsheetOption,document.createTextNode(' Excel / CSV files'));
+document.querySelector('.source-options').append(spreadsheetSourceLabel);
+const originalSyncSourceOptions=syncSourceOptions;
+syncSourceOptions=function(){originalSyncSourceOptions();uploadSection.hidden=!spreadsheetOption.checked;};
+document.querySelectorAll('.source-options input').forEach(input=>input.addEventListener('change',()=>syncSourceOptions()));
+sheetUpload.addEventListener('change',()=>chooseSource('spreadsheetOption'));
+syncSourceOptions();
+uploadButton.onclick=async()=>{
+  const files=[...sheetUpload.files];if(!files.length){uploadStatus.textContent='Choose spreadsheet files first.';return;}
+  uploadButton.disabled=true;sheetUpload.disabled=true;const messages=[];
+  try{for(const [i,file] of files.entries()){
+    uploadStatus.textContent='Importing '+(i+1)+' / '+files.length+': '+file.name;
+    if(file.size>50*1024*1024){messages.push(file.name+': exceeds 50 MB.');continue;}
+    const form=new FormData();form.append('files',file,file.name);
+    const response=await fetch('/api/spreadsheets/upload',{method:'POST',body:form});const result=await response.json();
+    if(!response.ok){messages.push(file.name+': '+(result.detail||'Upload failed'));continue;}
+    for(const item of result.files)messages.push(item.name+': imported '+item.cells+' cells.'+(item.warnings.length?' '+item.warnings.join(' '):''));
+    for(const item of result.errors)messages.push(item.name+': '+item.error);
+  }uploadStatus.textContent=messages.join('\n');await loadLiveGallery();}
+  catch(error){uploadStatus.textContent=messages.concat('Upload stopped: '+error.message).join('\n');}
+  finally{uploadButton.disabled=false;sheetUpload.disabled=false;}
+};
+loadLiveGallery();
+</script>
+

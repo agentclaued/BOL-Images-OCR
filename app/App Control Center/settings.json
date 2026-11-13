@@ -1,0 +1,22 @@
+{
+  "_help1": "Edit values, then save.",
+  "_help2": "Restart server to apply.",
+
+  "name": "BOL Images",
+
+  // "_host1": "Server listen IP.",  "0.0.0.0 = all PCs.", "127.0.0.1 = this PC.", public_url": 192.168.2.?? "
+
+  // curent settings    "Modify or update "
+  "host": "127.0.0.1",
+  "port": 8766,
+
+  // curent settings    "Modify or update " also modify here
+  "_url1": "Link tray opens.",
+  "public_url": "http://127.0.0.1:8766/",
+
+  "_do_not_change1": "Settings below: leave as is.",
+  "mutex": "BolImagesTray",
+  "shortcut": "BOL Images.lnk",
+  "start_command": ["{python}", "-m", "uvicorn", "app.main:app", "--host", "{host}", "--port", "{port}", "--proxy-headers", "--forwarded-allow-ips=*"],
+  "dev_command": ["{python}", "-m", "uvicorn", "app.main:app", "--host", "{host}", "--port", "{port}", "--reload"]
+}

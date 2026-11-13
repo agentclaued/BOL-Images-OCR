@@ -1,0 +1,6 @@
+BOL images/
+__pycache__/
+*.pyc
+logs/
+Debug/
+*.db
